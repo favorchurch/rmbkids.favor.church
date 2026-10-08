@@ -1,7 +1,7 @@
 // Sends a kid's sign-up details, activity and answers to the church's Google Sheet,
 // but only when a parent has ticked the consent box. Everything waits in an outbox on
 // this device and is sent when there is internet, so nothing is lost when offline.
-window.FKQ_SYNC_URL = window.FKQ_SYNC_URL || '';
+window.FKQ_SYNC_URL = window.FKQ_SYNC_URL || '/api/sync';
 const Sync = (() => {
   const KEY = 'rmb-outbox';
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
