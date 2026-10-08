@@ -1,6 +1,18 @@
 {
   "version": 2,
   "cleanUrls": true,
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "https://edbarber-hue.github.io/read-my-bible/",
+      "permanent": false
+    },
+    {
+      "source": "/((?!api).*)",
+      "destination": "https://edbarber-hue.github.io/read-my-bible/",
+      "permanent": false
+    }
+  ],
   "headers": [
     {
       "source": "/(.*).(webp|png|jpg|mp3|otf|ttf)",
