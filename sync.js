@@ -3,8 +3,10 @@
 // this device and is sent when there is internet, so nothing is lost when offline.
 window.FKQ_SYNC_URL = window.FKQ_SYNC_URL || '/api/sync';
 const Sync = (() => {
-  const KEY = 'rmb-outbox';
+  const KEY = 'rmb-outbox', CUSTODY_KEY = 'rmb-custody-v1';
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
+  const loadCustody = () => { try { return JSON.parse(localStorage.getItem(CUSTODY_KEY)) || {}; } catch { return {}; } };
+  const storeCustody = value => { try { localStorage.setItem(CUSTODY_KEY, JSON.stringify(value)); } catch { } };
   const store = q => { try { localStorage.setItem(KEY, JSON.stringify(q.slice(-400))); } catch { } };
   let busy = false;
   const kid = p => ({
@@ -25,14 +27,25 @@ const Sync = (() => {
     try {
       // a voice message goes on its own; everything else in small batches
       const first = q[0], batch = first.audioId ? [first] : q.filter(x => !x.audioId).slice(0, 15);
+      const custody = loadCustody();
       const body = await Promise.all(batch.map(async x => {
-        if (!x.audioId) return x;
-        const blob = await VoiceStore.get(x.audioId).catch(() => null);
-        return blob ? { ...x, audio: await toB64(blob), mime: blob.type || 'audio/webm' } : { ...x, audioMissing: true };
+        let item = { ...x };
+        if (item.kid?.id && custody[item.kid.id]) item.custodyToken = custody[item.kid.id];
+        if (item.audioId) {
+          const blob = await VoiceStore.get(item.audioId).catch(() => null);
+          item = blob ? { ...item, audio: await toB64(blob), mime: blob.type || 'audio/webm' } : { ...item, audioMissing: true };
+        }
+        return item;
       }));
       const res = await fetch(window.FKQ_SYNC_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ batch: body }) });
       const j = await res.json();
-      if (j && j.ok) { const done = new Set(batch.map(x => x.eid)); store(load().filter(x => !done.has(x.eid))); busy = false; if (load().length) setTimeout(flush, 300); return; }
+      if (j?.custodyTokens && typeof j.custodyTokens === 'object') {
+        Object.assign(custody, j.custodyTokens); storeCustody(custody);
+      }
+      if (j && j.ok) {
+        const done = new Set(batch.map(x => x.eid)); store(load().filter(x => !done.has(x.eid)));
+        busy = false; if (load().length) setTimeout(flush, 300); return;
+      }
     } catch { }
     busy = false;
   }
@@ -40,7 +53,9 @@ const Sync = (() => {
     progress: null,
     event(p, what, extra = {}) { push(p, { type: 'event', event: what, chapter: extra.chapter || '', details: extra.details || '', force: !!extra.force }); },
     answer(p, e) { push(p, { type: 'answer', chapter: e.ch || '', title: e.title || '', question: e.prompt || '', answer: [e.text, e.text2].filter(Boolean).join(' / '), audioId: e.audio ? e.id : '' }); },
-    flush, pending: () => load().length
+    flush, pending: () => load().length,
+    custodyFor(id) { return loadCustody()[id] || ''; },
+    importCustody(id, token) { const custody = loadCustody(); custody[id] = token; storeCustody(custody); }
   };
   addEventListener('online', flush);
   setInterval(flush, 60000);
