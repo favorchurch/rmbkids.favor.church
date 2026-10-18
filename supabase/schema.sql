@@ -64,24 +64,40 @@ ALTER TABLE public.rmb_kids ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rmb_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.rmb_answers ENABLE ROW LEVEL SECURITY;
 
--- Service role has full access (used by Vercel backend serverless functions)
+-- SECURITY MIGRATION: the former client-facing anon policies allowed arbitrary
+-- reads/writes, including profile and reflection overwrites. Remove them (and
+-- their SQL privileges) before relying on the service-role-only API boundary.
+DROP POLICY IF EXISTS "Anon can insert kids" ON public.rmb_kids;
+DROP POLICY IF EXISTS "Anon can update kids" ON public.rmb_kids;
+DROP POLICY IF EXISTS "Anon can read kids" ON public.rmb_kids;
+DROP POLICY IF EXISTS "Anon can insert events" ON public.rmb_events;
+DROP POLICY IF EXISTS "Anon can update events" ON public.rmb_events;
+DROP POLICY IF EXISTS "Anon can read events" ON public.rmb_events;
+DROP POLICY IF EXISTS "Anon can insert answers" ON public.rmb_answers;
+DROP POLICY IF EXISTS "Anon can update answers" ON public.rmb_answers;
+DROP POLICY IF EXISTS "Anon can read answers" ON public.rmb_answers;
+DROP POLICY IF EXISTS "Public read access for rmbkids-voice" ON storage.objects;
+DROP POLICY IF EXISTS "Service role upload access for rmbkids-voice" ON storage.objects;
+DROP POLICY IF EXISTS "Anon upload access for rmbkids-voice" ON storage.objects;
+DROP POLICY IF EXISTS "Anon update access for rmbkids-voice" ON storage.objects;
+DROP POLICY IF EXISTS "Public upload access for rmbkids-voice" ON storage.objects;
+-- Only the named legacy policies above are removed. In particular, do not
+-- inspect policy SQL for bucket-name substrings: storage.objects is shared by
+-- every bucket and one policy may intentionally cover several buckets.
+REVOKE ALL PRIVILEGES ON TABLE public.rmb_kids, public.rmb_events, public.rmb_answers FROM PUBLIC, anon, authenticated;
+GRANT ALL PRIVILEGES ON TABLE public.rmb_kids, public.rmb_events, public.rmb_answers TO service_role;
+
+-- No policies are granted to anon/authenticated: API functions use the
+-- server-only service role key and authorize each explorer custody token.
+DROP POLICY IF EXISTS "Service role full access on rmb_kids" ON public.rmb_kids;
+DROP POLICY IF EXISTS "Service role full access on rmb_events" ON public.rmb_events;
+DROP POLICY IF EXISTS "Service role full access on rmb_answers" ON public.rmb_answers;
 CREATE POLICY "Service role full access on rmb_kids"
-  ON public.rmb_kids FOR ALL
-  TO service_role
-  USING (true)
-  WITH CHECK (true);
-
+  ON public.rmb_kids FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access on rmb_events"
-  ON public.rmb_events FOR ALL
-  TO service_role
-  USING (true)
-  WITH CHECK (true);
-
+  ON public.rmb_events FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access on rmb_answers"
-  ON public.rmb_answers FOR ALL
-  TO service_role
-  USING (true)
-  WITH CHECK (true);
+  ON public.rmb_answers FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 -- Optional: Allow public read of leaderboard stats (without exposing parent contacts)
 CREATE OR REPLACE VIEW public.rmb_leaderboard AS
@@ -97,18 +113,24 @@ CREATE OR REPLACE VIEW public.rmb_leaderboard AS
   WHERE consent = true
   ORDER BY streak DESC, chapters_completed DESC;
 
--- Storage Bucket for Voice Recordings
+-- Storage Bucket for Voice Recordings. Private by default: voice recordings
+-- contain children's personal data. The API uses the service role and only
+-- issues short-lived access URLs through server-side authorization.
 INSERT INTO storage.buckets (id, name, public)
-VALUES ('rmbkids-voice', 'rmbkids-voice', true)
-ON CONFLICT (id) DO NOTHING;
-
--- Public read access for voice recordings
-CREATE POLICY "Public read access for rmbkids-voice"
-  ON storage.objects FOR SELECT
-  USING (bucket_id = 'rmbkids-voice');
-
--- Service role upload access for rmbkids-voice
-CREATE POLICY "Service role upload access for rmbkids-voice"
-  ON storage.objects FOR INSERT
-  TO service_role
+VALUES ('rmbkids-voice', 'rmbkids-voice', false)
+ON CONFLICT (id) DO UPDATE SET public = false;
+-- Do not alter storage.objects SQL privileges: this is a shared table for all
+-- project buckets. This restrictive policy overrides permissive browser-role
+-- policies (including legacy policies granted to PostgreSQL PUBLIC) only for
+-- rmbkids-voice rows. Supabase's service_role bypasses RLS and its privileges
+-- are unchanged; other buckets retain their existing policies and grants.
+DROP POLICY IF EXISTS "rmbkids voice browser deny" ON storage.objects;
+CREATE POLICY "rmbkids voice browser deny"
+  ON storage.objects AS RESTRICTIVE FOR ALL TO anon, authenticated
+  USING (bucket_id IS DISTINCT FROM 'rmbkids-voice')
+  WITH CHECK (bucket_id IS DISTINCT FROM 'rmbkids-voice');
+DROP POLICY IF EXISTS "Service role access to rmbkids-voice" ON storage.objects;
+CREATE POLICY "Service role access to rmbkids-voice"
+  ON storage.objects FOR ALL TO service_role
+  USING (bucket_id = 'rmbkids-voice')
   WITH CHECK (bucket_id = 'rmbkids-voice');
