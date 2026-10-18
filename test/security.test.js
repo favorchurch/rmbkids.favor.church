@@ -98,6 +98,34 @@ test('admin overview serves data only after valid bearer authentication', async 
   t.after(() => previous === undefined ? delete process.env.ADMIN_SECRET : process.env.ADMIN_SECRET = previous);
 });
 
+test('admin overview signs legacy timestamp audio paths and isolates per-file signing failures', async t => {
+  const previous = process.env.ADMIN_SECRET;
+  process.env.ADMIN_SECRET = 'secure-admin';
+  const signedPaths = [];
+  const client = {
+    from(name) {
+      return {
+        select() { return this; }, order() { return this; },
+        limit: async () => ({ data: name === 'rmb_kids' ? [] : [
+          { id: 1, audio_url: '1700000000000/legacy-voice.webm' },
+          { id: 2, audio_url: `${id}/missing-voice.webm` },
+        ], error: null }),
+      };
+    },
+    storage: { from: () => ({ createSignedUrl: async path => {
+      signedPaths.push(path);
+      if (path.includes('missing')) throw new Error('storage unavailable');
+      return { data: { signedUrl: `https://private.test/${path}` }, error: null };
+    } }) },
+  };
+  const res = await call(adminHandlerFactory(() => client), 'GET', undefined, { authorization: 'Bearer secure-admin' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(signedPaths, ['1700000000000/legacy-voice.webm', `${id}/missing-voice.webm`]);
+  assert.equal(res.body.recentAnswers[0].audio_url, 'https://private.test/1700000000000/legacy-voice.webm');
+  assert.equal(res.body.recentAnswers[1].audio_url, null);
+  t.after(() => previous === undefined ? delete process.env.ADMIN_SECRET : process.env.ADMIN_SECRET = previous);
+});
+
 test('first sync creates explorer and returns custody token; token authorizes later writes', async t => {
   const prevSecret = process.env.SYNC_CUSTODY_SECRET, prevService = process.env.SUPABASE_SERVICE_ROLE_KEY;
   process.env.SYNC_CUSTODY_SECRET = 'test-sync-secret';
@@ -136,6 +164,20 @@ test('sync rejects forged custody token and explorer/path traversal before any w
     mime: 'audio/webm', audioId: '../outside',
   })] });
   assert.equal(traversalAudio.statusCode, 400);
+  assert.equal(db.uploads.length, 0);
+  t.after(() => previous === undefined ? delete process.env.SYNC_CUSTODY_SECRET : process.env.SYNC_CUSTODY_SECRET = previous);
+});
+
+test('sync accepts a text-only answer with an empty audio id', async t => {
+  const previous = process.env.SYNC_CUSTODY_SECRET;
+  process.env.SYNC_CUSTODY_SECRET = 'test-sync-secret';
+  const db = memorySupabase(), handler = syncHandlerFactory(() => db);
+  const answer = await call(handler, 'POST', { batch: [{
+    type: 'answer', eid: `${id}-1700000000000-text1`, audioId: '', answer: 'A text response',
+    kid: { id, firstName: 'Explorer', consent: true },
+  }] });
+  assert.equal(answer.statusCode, 200);
+  assert.equal(db.tables.rmb_answers.get(`${id}-1700000000000-text1`).answer_text, 'A text response');
   assert.equal(db.uploads.length, 0);
   t.after(() => previous === undefined ? delete process.env.SYNC_CUSTODY_SECRET : process.env.SYNC_CUSTODY_SECRET = previous);
 });

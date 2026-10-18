@@ -331,6 +331,17 @@ function maybeDetails(p) {
 }
 function addJournal(p, entry) { p.journal = p.journal || []; p.journal.push(entry); save(); Sync.answer(p, entry); }
 Sync.progress = p => ({ chapters: (p.completed || []).length, currentChapter: todayChapter(p), streak: streak(p), home: ['Tent', 'Trailer', 'House', 'Mansion'][p.homeStage || 0] });
+Sync.configureRekey({
+  createId: createExplorerId,
+  updateProfile(oldId, newId) {
+    const p = state.profiles.find(item => item.id === oldId);
+    if (!p) return;
+    p.id = newId;
+    if (currentId === oldId) currentId = newId;
+    if (state.currentId === oldId) state.currentId = newId;
+    save();
+  }
+});
 
 // ---------- Profiles modal ----------
 function showProfiles() {

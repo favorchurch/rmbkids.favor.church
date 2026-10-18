@@ -8,7 +8,7 @@ An interactive Bible reading adventure for kids, paired with a serverless backen
 
 - **Frontend**: Static Web / PWA (`index.html`, `app.js`, `game.js`, `sync.js`, CSS & WebP assets).
 - **Backend API**: Vercel Serverless Functions (`/api/*`).
-  - `POST /api/sync`: Ingests kid profiles, progress, audit events, quiz/reflection answers, and voice recordings. First sync for an unused explorer UUID returns a signed custody token, stored by the browser on that device and sent on future syncs; writes to existing explorer records require that token. Parent-created transfer codes carry the custody token so an intentional device transfer can continue syncing the same explorer; treat a transfer code like a password. Existing records created before custody protection cannot be updated by old clients; do not bypass this protection—plan a separately authorized parent re-enrollment/recovery flow if required.
+  - `POST /api/sync`: Ingests kid profiles, progress, audit events, quiz/reflection answers, and voice recordings. First sync for an unused explorer UUID returns a signed custody token, stored by the browser on that device and sent on future syncs; writes to existing explorer records require that token. Parent-created transfer codes carry the custody token so an intentional device transfer can continue syncing the same explorer; treat a transfer code like a password. Existing records created before custody protection remain read-only: a device with no local custody token that receives 401 re-keys its local profile and queued events/answers to a fresh explorer ID, preserving on-device progress and syncing as a new record. This migration never claims or modifies the old server row. Leaders will see a new record per re-keyed device.
   - `GET /api/health`: Healthcheck verifying database connectivity.
   - `GET /api/admin/overview`: Summary metrics for church staff/leaders (kids count, country distribution, streaks, recent answers).
 - **Database & Storage**: Supabase (PostgreSQL + Supabase Storage).
@@ -45,7 +45,15 @@ Configure these in your Vercel Project Settings (or in `.env.local` for local de
 
 ---
 
+## Legacy Sync Migration
+
+Devices that have not stored a custody token cannot safely take ownership of their pre-existing server record. On the first 401 from sync, the client assigns that local profile a fresh explorer ID and rewrites its pending outbox items to the new ID. The profile's local reading progress, answers, and audio remain on the device. The migration marker prevents repeated re-keying; a follow-up 401 is left queued rather than triggering an unbounded identity loop. The old server row is intentionally read-only and unchanged. Because each re-keyed device registers independently, leaders will see a new record for each such device; records are not merged automatically.
+
 ## Deploying to Vercel
+
+1. Configure the server-only `ADMIN_SECRET` and `SYNC_CUSTODY_SECRET` environment variables in Vercel (along with the required Supabase variables).
+2. Apply the security schema migration in `supabase/schema.sql` to the Supabase project.
+3. Deploy the application code to Vercel.
 
 ```bash
 # Link or deploy to Vercel under the favor-church team

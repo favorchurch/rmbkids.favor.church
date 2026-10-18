@@ -42,10 +42,13 @@ export function createHandler(getClient = getSupabase) {
       if (ansErr) throw ansErr;
       const privateAnswers = await Promise.all((answers || []).map(async answer => {
         const path = answer.audio_url;
-        if (typeof path !== 'string' || !/^[0-9a-f-]{36}\/[-A-Za-z0-9_]{1,100}\.(?:webm|m4a|ogg|mp3|wav)$/i.test(path)) return answer;
-        const { data, error } = await supabase.storage.from('rmbkids-voice').createSignedUrl(path, 60 * 60);
-        if (error) throw error;
-        return { ...answer, audio_url: data?.signedUrl || null };
+        if (typeof path !== 'string' || !/^(?:[0-9a-f-]{36}|[0-9]{10,16})\/[-A-Za-z0-9_]{1,100}\.(?:webm|m4a|ogg|mp3|wav)$/i.test(path)) return { ...answer, audio_url: null };
+        try {
+          const { data, error } = await supabase.storage.from('rmbkids-voice').createSignedUrl(path, 60 * 60);
+          return { ...answer, audio_url: error ? null : data?.signedUrl || null };
+        } catch {
+          return { ...answer, audio_url: null };
+        }
       }));
 
       const totalKids = kids?.length || 0;

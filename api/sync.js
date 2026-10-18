@@ -89,7 +89,7 @@ export function createHandler(getClient = getSupabase) {
         for (const field of ['title', 'question', 'answer']) {
           if (item[field] != null && (typeof item[field] !== 'string' || item[field].length > 10000)) return res.status(400).json({ ok: false, error: `Invalid ${field}` });
         }
-        if (item.audioId != null && (typeof item.audioId !== 'string' || !SAFE_FILE_ID.test(item.audioId))) return res.status(400).json({ ok: false, error: 'Invalid audio id' });
+        if (item.audioId && (typeof item.audioId !== 'string' || !SAFE_FILE_ID.test(item.audioId))) return res.status(400).json({ ok: false, error: 'Invalid audio id' });
         const audio = parseAudio(item);
         if (!audio) return res.status(400).json({ ok: false, error: 'Invalid audio payload or unsupported MIME type' });
         item._validatedAudio = audio;
