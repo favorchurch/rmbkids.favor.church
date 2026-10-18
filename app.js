@@ -3,6 +3,13 @@ const $ = s => document.querySelector(s);
 const STORE = 'matthew-quest-v1';
 const MASTER_CODE = '7777';
 const pad = n => String(n).padStart(2, '0');
+const createExplorerId = () => {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
 const dateKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const todayKey = () => dateKey(new Date());
 function addDays(key, n) { const d = new Date(`${key}T12:00:00`); d.setDate(d.getDate() + n); return dateKey(d); }
@@ -334,7 +341,7 @@ function showProfiles() {
     const d = readDetails(true); if (!d) return;
     const name = d.firstName, age = d.age, gender = $('#modalCard input[name="newGender"]:checked')?.value || 'boy';
     if (state.profiles.some(p => `${p.name} ${p.lastName || ''}`.trim().toLowerCase() === `${d.firstName} ${d.lastName}`.toLowerCase())) { toast('That explorer is already on this device'); return; }
-    const p = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), name, age, gender, startDate: todayKey(), completed: [], dailyPass: {}, homeStage: 0, skin: 2, hair: 0, hairColor: 0, decor: {}, outdoorDecor: {}, cosmetics: { accessory: null, trail: null, jetpack: null, outfit: null }, best: 0, totalStars: 0, congratsShown: false, v2: 1 };
+    const p = { id: createExplorerId(), name, age, gender, startDate: todayKey(), completed: [], dailyPass: {}, homeStage: 0, skin: 2, hair: 0, hairColor: 0, decor: {}, outdoorDecor: {}, cosmetics: { accessory: null, trail: null, jetpack: null, outfit: null }, best: 0, totalStars: 0, congratsShown: false, v2: 1 };
     applyDetails(p, d); p.lastWelcome = null;
     state.profiles.push(p); currentId = state.currentId = p.id; leaveFreshLanding(); save(); Sync.event(p, 'Signed up'); closeModal(); render(); toast(`Welcome, ${name}!`); setTimeout(() => maybeInstall(), 900);
   };
@@ -343,7 +350,7 @@ function showProfiles() {
 }
 function showTransfer() {
   const p = profile(); let code = '';
-  if (p) code = btoa(unescape(encodeURIComponent(JSON.stringify({ ...p, exportVersion: 1 }))));
+  if (p) code = btoa(unescape(encodeURIComponent(JSON.stringify({ ...p, custodyToken: Sync.custodyFor(p.id), exportVersion: 1 }))));
   openModal(`${header('SAVE TRANSFER', 'Move between devices')}<p>Progress saves automatically on this device. To move an explorer to another phone or laptop, copy their transfer code and import it there. Later changes won’t sync automatically.</p>${p ? `<label class="field">${escapeHtml(p.name)}’s transfer code<textarea id="exportCode" rows="4" readonly>${code}</textarea></label><button id="copyCode" class="button secondary">Copy code</button>` : ''}<label class="field">Import an explorer’s transfer code<textarea id="importCode" rows="4" placeholder="Paste a transfer code here"></textarea></label><button id="importButton" class="button primary">Import explorer</button>`);
   $('#copyCode')?.addEventListener('click', async () => { try { await navigator.clipboard.writeText(code); } catch { $('#exportCode').select(); document.execCommand('copy'); } toast('Transfer code copied'); });
   $('#importButton').onclick = () => {
@@ -351,11 +358,15 @@ function showTransfer() {
       const imp = JSON.parse(decodeURIComponent(escape(atob($('#importCode').value.trim()))));
       if (imp.exportVersion !== 1 || !imp.name || !Array.isArray(imp.completed) || imp.age < 4 || imp.age > 12) throw Error();
       delete imp.exportVersion;
-      if (!imp.id || state.profiles.some(p => p.id === imp.id)) imp.id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());   // same id = same kid in the church records
+      const importedCustodyToken = typeof imp.custodyToken === 'string' ? imp.custodyToken : '';
+      const importedId = imp.id;
+      delete imp.custodyToken;
+      if (!imp.id || state.profiles.some(p => p.id === imp.id)) { imp.id = createExplorerId(); }
       imp.name = String(imp.name).slice(0, 22);
       imp.completed = [...new Set(imp.completed.filter(n => Number.isInteger(n) && n >= 1 && n <= 28))];
       imp.dailyPass = imp.dailyPass && typeof imp.dailyPass === 'object' ? imp.dailyPass : {};   // keeps the streak when moving devices
       if (state.profiles.some(p => p.name.toLowerCase() === imp.name.toLowerCase())) imp.name += ' (imported)';
+      if (importedId === imp.id && importedCustodyToken) Sync.importCustody(imp.id, importedCustodyToken);
       state.profiles.push(imp); currentId = state.currentId = imp.id; save(); closeModal(); render(); toast('Explorer imported');
     } catch { toast('That transfer code could not be read'); }
   };
