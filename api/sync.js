@@ -113,10 +113,7 @@ export function createHandler(getClient = getSupabase) {
         if (existing && !validCustodyToken(id, token, secret)) {
           return res.status(401).json({ ok: false, error: 'Valid custody token required for this explorer' });
         }
-        if (!existing) {
-          issued[id] = custodyToken(id, secret);
-          knownInBatch.add(id);
-        }
+        if (!existing) knownInBatch.add(id);
       }
 
       for (const [id, items] of grouped) {
@@ -148,9 +145,10 @@ export function createHandler(getClient = getSupabase) {
           } else {
             const { error: insertError } = await supabase.from('rmb_kids').insert(kidRecord);
             if (insertError) {
-              if (insertError.code === '23505') return res.status(409).json({ ok: false, error: 'Explorer already exists; custody token required' });
+              if (insertError.code === '23505') return res.status(409).json({ ok: false, error: 'Explorer already exists; custody token required', custodyTokens: issued });
               throw insertError;
             }
+            issued[id] = custodyToken(id, secret);
             knownInBatch.delete(id);
           }
 

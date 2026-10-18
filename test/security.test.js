@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createHandler as adminHandlerFactory } from '../api/admin/overview.js';
 import { createHandler as syncHandlerFactory } from '../api/sync.js';
 
@@ -25,6 +26,10 @@ function memorySupabase() {
         maybeSingle: async () => ({ data: tables[name].get(id) || null, error: null }),
         order() { return this; }, limit() { return Promise.resolve({ data: [...tables[name].values()], error: null }); },
         insert: async record => {
+          if (client.insertHook) {
+            const hooked = await client.insertHook(name, record, tables);
+            if (hooked) return hooked;
+          }
           const key = record.id || record.eid;
           if (tables[name].has(key)) return { error: { code: '23505', message: 'duplicate' } };
           tables[name].set(key, record); return { error: null };
@@ -146,6 +151,46 @@ test('first sync creates explorer and returns custody token; token authorizes la
     prevSecret === undefined ? delete process.env.SYNC_CUSTODY_SECRET : process.env.SYNC_CUSTODY_SECRET = prevSecret;
     prevService === undefined ? delete process.env.SUPABASE_SERVICE_ROLE_KEY : process.env.SUPABASE_SERVICE_ROLE_KEY = prevService;
   });
+});
+
+test('sync never returns a custody token when the first explorer insert fails', async t => {
+  const previous = process.env.SYNC_CUSTODY_SECRET;
+  process.env.SYNC_CUSTODY_SECRET = 'test-sync-secret';
+  const db = memorySupabase();
+  db.insertHook = async name => name === 'rmb_kids' ? { error: { code: 'XX000', message: 'write failed' } } : null;
+  const result = await call(syncHandlerFactory(() => db), 'POST', { batch: [baseItem()] });
+  assert.equal(result.statusCode, 500);
+  assert.deepEqual(result.body.custodyTokens, {});
+  assert.equal(db.tables.rmb_kids.has(id), false);
+  t.after(() => previous === undefined ? delete process.env.SYNC_CUSTODY_SECRET : process.env.SYNC_CUSTODY_SECRET = previous);
+});
+
+test('sync error response returns tokens only for rows created before a later race or failure', async t => {
+  const previous = process.env.SYNC_CUSTODY_SECRET;
+  process.env.SYNC_CUSTODY_SECRET = 'test-sync-secret';
+  const secondId = 'f3d2b7b8-6bce-4b15-92e2-53277464f6e4';
+  const db = memorySupabase();
+  db.insertHook = async (name, record) => name === 'rmb_kids' && record.id === secondId
+    ? { error: { code: '23505', message: 'concurrent registration' } }
+    : null;
+  const result = await call(syncHandlerFactory(() => db), 'POST', { batch: [
+    baseItem(), baseItem({ kid: { id: secondId, firstName: 'Concurrent' }, eid: `${secondId}-event` }),
+  ] });
+  assert.equal(result.statusCode, 409);
+  assert.match(result.body.custodyTokens[id], /^v1\.[a-f0-9]{64}$/);
+  assert.equal(Object.hasOwn(result.body.custodyTokens, secondId), false);
+  assert.equal(db.tables.rmb_kids.has(id), true);
+  assert.equal(db.tables.rmb_kids.has(secondId), false);
+  t.after(() => previous === undefined ? delete process.env.SYNC_CUSTODY_SECRET : process.env.SYNC_CUSTODY_SECRET = previous);
+});
+
+test('storage migration preserves shared object grants and policies but denies browser roles on voice bucket', () => {
+  const schema = readFileSync(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
+  assert.doesNotMatch(schema, /\b(?:REVOKE|GRANT)\b[^;]*\bstorage\.objects\b/i);
+  assert.doesNotMatch(schema, /pg_policies|FOR p IN|DROP POLICY %I/i);
+  assert.match(schema, /CREATE POLICY "rmbkids voice browser deny"[\s\S]*?ON storage\.objects AS RESTRICTIVE FOR ALL TO anon, authenticated/i);
+  assert.match(schema, /USING \(bucket_id IS DISTINCT FROM 'rmbkids-voice'\)\s+WITH CHECK \(bucket_id IS DISTINCT FROM 'rmbkids-voice'\)/i);
+  assert.match(schema, /DROP POLICY IF EXISTS "Public read access for rmbkids-voice" ON storage\.objects/i);
 });
 
 test('sync rejects forged custody token and explorer/path traversal before any write', async t => {

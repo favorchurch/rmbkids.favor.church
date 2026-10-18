@@ -81,27 +81,9 @@ DROP POLICY IF EXISTS "Service role upload access for rmbkids-voice" ON storage.
 DROP POLICY IF EXISTS "Anon upload access for rmbkids-voice" ON storage.objects;
 DROP POLICY IF EXISTS "Anon update access for rmbkids-voice" ON storage.objects;
 DROP POLICY IF EXISTS "Public upload access for rmbkids-voice" ON storage.objects;
--- Also remove policies from prior/manual schema versions regardless of their
--- names whenever they target browser roles (including PostgreSQL PUBLIC).
-DO $$
-DECLARE p RECORD;
-BEGIN
-  FOR p IN
-    SELECT schemaname, tablename, policyname
-    FROM pg_policies
-    WHERE (schemaname = 'public' AND tablename IN ('rmb_kids', 'rmb_events', 'rmb_answers'))
-       OR (schemaname = 'storage' AND tablename = 'objects'
-           AND (coalesce(qual, '') ILIKE '%rmbkids-voice%' OR coalesce(with_check, '') ILIKE '%rmbkids-voice%'))
-  LOOP
-    IF EXISTS (
-      SELECT 1 FROM pg_policies q
-      WHERE q.schemaname = p.schemaname AND q.tablename = p.tablename
-        AND q.policyname = p.policyname AND q.roles && ARRAY['anon', 'authenticated', 'public']::name[]
-    ) THEN
-      EXECUTE format('DROP POLICY %I ON %I.%I', p.policyname, p.schemaname, p.tablename);
-    END IF;
-  END LOOP;
-END $$;
+-- Only the named legacy policies above are removed. In particular, do not
+-- inspect policy SQL for bucket-name substrings: storage.objects is shared by
+-- every bucket and one policy may intentionally cover several buckets.
 REVOKE ALL PRIVILEGES ON TABLE public.rmb_kids, public.rmb_events, public.rmb_answers FROM PUBLIC, anon, authenticated;
 GRANT ALL PRIVILEGES ON TABLE public.rmb_kids, public.rmb_events, public.rmb_answers TO service_role;
 
@@ -137,8 +119,16 @@ CREATE OR REPLACE VIEW public.rmb_leaderboard AS
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('rmbkids-voice', 'rmbkids-voice', false)
 ON CONFLICT (id) DO UPDATE SET public = false;
-REVOKE ALL PRIVILEGES ON TABLE storage.objects FROM PUBLIC, anon, authenticated;
-GRANT ALL PRIVILEGES ON TABLE storage.objects TO service_role;
+-- Do not alter storage.objects SQL privileges: this is a shared table for all
+-- project buckets. This restrictive policy overrides permissive browser-role
+-- policies (including legacy policies granted to PostgreSQL PUBLIC) only for
+-- rmbkids-voice rows. Supabase's service_role bypasses RLS and its privileges
+-- are unchanged; other buckets retain their existing policies and grants.
+DROP POLICY IF EXISTS "rmbkids voice browser deny" ON storage.objects;
+CREATE POLICY "rmbkids voice browser deny"
+  ON storage.objects AS RESTRICTIVE FOR ALL TO anon, authenticated
+  USING (bucket_id IS DISTINCT FROM 'rmbkids-voice')
+  WITH CHECK (bucket_id IS DISTINCT FROM 'rmbkids-voice');
 DROP POLICY IF EXISTS "Service role access to rmbkids-voice" ON storage.objects;
 CREATE POLICY "Service role access to rmbkids-voice"
   ON storage.objects FOR ALL TO service_role
