@@ -1,6 +1,26 @@
 import crypto from 'node:crypto';
 import { getSupabase } from '../_supabase.js';
 
+const PATH_RE = /^(?:[0-9a-f-]{36}|[0-9]{10,16})\/[-A-Za-z0-9_]{1,100}\.(?:webm|m4a|ogg|mp3|wav)$/i;
+const LEGACY_PUBLIC_PREFIX = '/storage/v1/object/public/rmbkids-voice/';
+
+// Rows written by the old sync stored getPublicUrl() output. Accept only that exact
+// Supabase form for this bucket and reduce it to the object path; anything else is rejected.
+function voiceObjectPath(value) {
+  if (typeof value !== 'string') return null;
+  if (PATH_RE.test(value)) return value;
+  let url;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash) return null;
+  let allowedHost = /^[a-z0-9-]+\.supabase\.co$/i;
+  try { if (process.env.SUPABASE_URL) allowedHost = new URL(process.env.SUPABASE_URL).hostname.toLowerCase(); } catch { /* keep default */ }
+  const hostOk = typeof allowedHost === 'string' ? url.hostname === allowedHost : allowedHost.test(url.hostname);
+  if (!hostOk || !url.pathname.startsWith(LEGACY_PUBLIC_PREFIX)) return null;
+  let path;
+  try { path = decodeURIComponent(url.pathname.slice(LEGACY_PUBLIC_PREFIX.length)); } catch { return null; }
+  return PATH_RE.test(path) ? path : null;
+}
+
 export function createHandler(getClient = getSupabase) {
   return async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
@@ -41,8 +61,8 @@ export function createHandler(getClient = getSupabase) {
         .limit(50);
       if (ansErr) throw ansErr;
       const privateAnswers = await Promise.all((answers || []).map(async answer => {
-        const path = answer.audio_url;
-        if (typeof path !== 'string' || !/^(?:[0-9a-f-]{36}|[0-9]{10,16})\/[-A-Za-z0-9_]{1,100}\.(?:webm|m4a|ogg|mp3|wav)$/i.test(path)) return { ...answer, audio_url: null };
+        const path = voiceObjectPath(answer.audio_url);
+        if (!path) return { ...answer, audio_url: null };
         try {
           const { data, error } = await supabase.storage.from('rmbkids-voice').createSignedUrl(path, 60 * 60);
           return { ...answer, audio_url: error ? null : data?.signedUrl || null };

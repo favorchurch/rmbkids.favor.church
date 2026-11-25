@@ -131,6 +131,37 @@ test('admin overview signs legacy timestamp audio paths and isolates per-file si
   t.after(() => previous === undefined ? delete process.env.ADMIN_SECRET : process.env.ADMIN_SECRET = previous);
 });
 
+test('admin overview signs legacy full public URLs for the voice bucket and rejects look-alikes', async t => {
+  const previous = process.env.ADMIN_SECRET, prevUrl = process.env.SUPABASE_URL;
+  process.env.ADMIN_SECRET = 'secure-admin';
+  delete process.env.SUPABASE_URL;
+  const signedPaths = [];
+  const good = `https://abcd1234.supabase.co/storage/v1/object/public/rmbkids-voice/${id}/voice-1.webm`;
+  const bad = [
+    `https://evil.example/storage/v1/object/public/rmbkids-voice/${id}/v.webm`,
+    `https://abcd1234.supabase.co/storage/v1/object/public/other-bucket/${id}/v.webm`,
+    `https://abcd1234.supabase.co/storage/v1/object/public/rmbkids-voice/${id}/..%2F..%2Fx.webm`,
+    `http://abcd1234.supabase.co/storage/v1/object/public/rmbkids-voice/${id}/v.webm`,
+    `https://abcd1234.supabase.co/storage/v1/object/public/rmbkids-voice/${id}/v.webm?x=1`,
+  ];
+  const rows = [good, ...bad].map((audio_url, i) => ({ id: i, audio_url }));
+  const client = {
+    from(name) {
+      return { select() { return this; }, order() { return this; }, limit: async () => ({ data: name === 'rmb_kids' ? [] : rows, error: null }) };
+    },
+    storage: { from: () => ({ createSignedUrl: async path => { signedPaths.push(path); return { data: { signedUrl: `https://private.test/${path}` }, error: null }; } }) },
+  };
+  const res = await call(adminHandlerFactory(() => client), 'GET', undefined, { authorization: 'Bearer secure-admin' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(signedPaths, [`${id}/voice-1.webm`]);
+  assert.equal(res.body.recentAnswers[0].audio_url, `https://private.test/${id}/voice-1.webm`);
+  assert.deepEqual(res.body.recentAnswers.slice(1).map(a => a.audio_url), bad.map(() => null));
+  t.after(() => {
+    previous === undefined ? delete process.env.ADMIN_SECRET : process.env.ADMIN_SECRET = previous;
+    prevUrl === undefined ? delete process.env.SUPABASE_URL : process.env.SUPABASE_URL = prevUrl;
+  });
+});
+
 test('first sync creates explorer and returns custody token; token authorizes later writes', async t => {
   const prevSecret = process.env.SYNC_CUSTODY_SECRET, prevService = process.env.SUPABASE_SERVICE_ROLE_KEY;
   process.env.SYNC_CUSTODY_SECRET = 'test-sync-secret';
