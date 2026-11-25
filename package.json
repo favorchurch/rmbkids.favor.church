@@ -2,11 +2,13 @@
   "name": "rmbkids-favor-church",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Backend API and static web app for Favor Kids Quest - Read My Bible 2026",
   "scripts": {
     "dev": "vercel dev",
     "deploy": "vercel --prod",
-    "db:setup": "node scripts/setup-db.mjs"
+    "db:setup": "node scripts/setup-db.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1"
